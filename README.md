@@ -84,3 +84,61 @@ pdf	gutter	The gutter between columns is 0.166 inches wide (on page 3), but shou
 pdf	notembedded	One or more fonts are not embedded. (FAQ 109)	-
 pdf	bookmarks	Bookmarks are not allowed. (FAQ 115)	-
 Could you please check the format of your submission and resubmit the paper to within 24 hours?
+
+
+
+\documentclass[10pt,conference,letterpaper]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% ====================== STRONGER FIXES FOR REMAINING ERRORS ======================
+
+% 1. Force larger top margin (critical for page 4 error)
+\newcommand{\CLASSINPUTtoptextmargin}{0.80in}   % Increased from 0.75in
+\newcommand{\CLASSINPUTbottomtextmargin}{1.0in}
+
+% 2. Gutter (keep safe value)
+\setlength{\columnsep}{0.24in}
+
+% 3. Bookmarks disabled + hyperref (safe settings)
+\usepackage[bookmarks=false,
+            hypertexnames=false,
+            colorlinks=true,
+            linkcolor=blue,
+            citecolor=blue,
+            urlcolor=blue]{hyperref}
+
+% 4. Font settings - Better for embedding Times-like fonts
+\usepackage{times}
+\usepackage{mathptmx}   % Better math + text font compatibility
+
+% ====================== YOUR PACKAGES (Cleaned) ======================
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+
+% ====================== IMPORTANT: COMMENT THESE ======================
+% These often cause margin or font problems
+%\usepackage{microtype}   % <-- Comment this out (very common cause of issues)
+%\usepackage{lineno}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+Dear Mr. Mohan:
+
+When processing your IEEE Globecom 2026 SAC - EH paper #1571269697, entitled "SpecFusion-SSL: Spectrum Fusion Self-Supervised Learning for PPG-Based Heart Rate and Blood Pressure Monitoring", we found one or more manuscript problems:
+
+pdf	notembedded	The font TimesNewRomanPS-BoldMT is not embedded in the file. (FAQ 109)	-
+pdf	topmargins	The top margin is 0.65 in on page 4, which is below the required margin of 0.7 in.	-
+Could you please check the format of your submission and resubmit the paper to within 24 hours?
+
+
