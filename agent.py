@@ -1,156 +1,207 @@
 # =====================================================
-# PPG-DaLiA FAST AGENT ANALYSIS (ALL SUBJECTS, 100 WINDOWS)
+# FINAL CLEAN CHAT-BASED PPG MULTI-SUBJECT SYSTEM
 # =====================================================
 
 import os
 import pickle
 import numpy as np
-import pandas as pd
 from scipy.signal import butter, filtfilt, find_peaks
 import glob
-import requests
-from tqdm import tqdm
+from langchain_community.llms import Ollama
+from langchain_core.prompts import PromptTemplate
 
-# ====================== CONFIG ======================
+# ================= CONFIG =================
 DATA_DIR = r"/Users/anandmohan/Downloads/PPG_FieldStudy"
 SUBJECTS = [f"S{i}" for i in range(1, 16)]
 
+FS = 64
 WINDOW_SEC = 10
-FS_PPG = 64
 MAX_WINDOWS = 100
 
-OUTPUT_FILE = "/Users/anandmohan/Downloads/PPG_FieldStudyPPG_Subject_Reports.csv"
+llm = Ollama(model="phi")
 
-# ===================================================
-
-
-# ====================== LLM ======================
-def ask_llm(prompt):
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": "phi",
-            "prompt": prompt,
-            "stream": False
-        }
-    )
-    return response.json()["response"]
+# ==========================================
 
 
-# ====================== LOAD ======================
-def load_subject(subject_id):
-    files = glob.glob(os.path.join(DATA_DIR, subject_id, "*.pkl"))
+# ================= SIGNAL FUNCTIONS =================
+
+def load_subject(subject):
+    files = glob.glob(os.path.join(DATA_DIR, subject, "*.pkl"))
     if not files:
-        files = glob.glob(os.path.join(DATA_DIR, subject_id, f"{subject_id}.pkl"))
-    if not files:
-        print(f"❌ Missing: {subject_id}")
         return None
-
     with open(files[0], 'rb') as f:
         return pickle.load(f, encoding='latin1')
 
 
-# ====================== FILTER ======================
-def bandpass_filter(sig, fs, low=0.5, high=5.0):
-    nyq = fs / 2
-    b, a = butter(3, [low/nyq, high/nyq], btype='band')
+def bandpass(sig):
+    b, a = butter(3, [0.5/(FS/2), 5/(FS/2)], btype='band')
     return filtfilt(b, a, sig)
 
 
-# ====================== HR ======================
-def compute_hr(ppg, fs=64):
-    ppg_filt = bandpass_filter(ppg, fs)
-    peaks, _ = find_peaks(ppg_filt, distance=fs*0.4)
-
+def compute_hr(ppg):
+    ppg = bandpass(ppg)
+    peaks, _ = find_peaks(ppg, distance=FS * 0.4)
     if len(peaks) < 2:
         return np.nan
-
-    rr = np.diff(peaks) / fs
-    return 60 / np.mean(rr)
+    return 60 / np.mean(np.diff(peaks) / FS)
 
 
-# ====================== MAIN ======================
-results = []
+# ================= PROMPTS =================
 
-for subject in tqdm(SUBJECTS, desc="Processing Subjects"):
+report_prompt = PromptTemplate.from_template("""
+You are a biomedical signal analysis assistant.
 
+STRICT RULES:
+- Do NOT say "sorry"
+- Do NOT apologize
+- Do NOT mention limitations
+- Do NOT invent anything
+- Only use given numerical data
+- Be direct, clinical, and concise
+
+DATA:
+Mean HR: {mean_hr}
+STD HR: {std_hr}
+Motion Level: {motion}
+
+STYLE: {style}
+
+OUTPUT FORMAT:
+Condition:
+Activity:
+Reliability:
+
+Suggestions:
+- ...
+- ...
+""")
+
+chat_prompt_template = """
+You are a biomedical assistant.
+
+STRICT RULES:
+- Do NOT say "sorry"
+- Do NOT apologize
+- Do NOT invent information
+- Answer only using given data
+- Be direct and precise
+
+DATA:
+Mean HR: {mean_hr}
+STD HR: {std_hr}
+Motion: {motion}
+
+User Question:
+{question}
+"""
+
+
+# ================= PROCESS SUBJECT =================
+
+def process_subject(subject):
     data = load_subject(subject)
     if data is None:
-        continue
+        print("❌ Missing:", subject)
+        return None
 
     bvp = data['signal']['wrist']['BVP'].flatten()
     acc = data['signal']['wrist']['ACC']
 
-    window = WINDOW_SEC * FS_PPG
+    window = WINDOW_SEC * FS
 
-    hrs = []
-    motions = []
+    hrs, motions = [], []
 
-    print(f"\nProcessing {subject}...")
-
-    count = 0
-
-    for start in range(0, len(bvp) - window + 1, window):
-
-        if count >= MAX_WINDOWS:
+    for i, start in enumerate(range(0, len(bvp) - window, window)):
+        if i >= MAX_WINDOWS:
             break
 
         end = start + window
+        ppg = bvp[start:end]
 
-        ppg_win = bvp[start:end]
-
-        acc_win = acc[int(start*32/64):int(end*32/64)]
+        acc_win = acc[int(start * 32 / 64):int(end * 32 / 64)]
         acc_mag = np.sqrt(np.sum(acc_win**2, axis=1))
 
-        hr = compute_hr(ppg_win)
-        motion = np.sqrt(np.mean(acc_mag**2))
+        hrs.append(compute_hr(ppg))
+        motions.append(np.sqrt(np.mean(acc_mag**2)))
 
-        hrs.append(hr)
-        motions.append(motion)
-
-        count += 1
-
-    hrs = np.array(hrs)
-    motions = np.array(motions)
-
-    # ================= SUMMARY =================
-    mean_hr = np.nanmean(hrs)
-    std_hr = np.nanstd(hrs)
-    mean_motion = np.nanmean(motions)
-
-    print(f"{subject} → HR: {mean_hr:.2f}, Motion: {mean_motion:.2f}")
-
-    # ================= LLM REPORT =================
-    prompt = f"""
-You are a biomedical assistant.
-
-Subject: {subject}
-
-Mean Heart Rate: {mean_hr:.2f} bpm
-HR Variability (STD): {std_hr:.2f}
-Motion Level: {mean_motion:.2f}
-
-Give a short health report:
-- cardiovascular condition
-- activity level
-- signal reliability
-"""
-
-    report = ask_llm(prompt)
-
-    print(f"\n{subject} Report:\n{report}\n")
-
-    results.append({
-        "subject": subject,
-        "mean_hr": mean_hr,
-        "std_hr": std_hr,
-        "motion": mean_motion,
-        "report": report
-    })
+    return np.nanmean(hrs), np.nanstd(hrs), np.nanmean(motions)
 
 
-# ================= SAVE =================
-df = pd.DataFrame(results)
-df.to_csv(OUTPUT_FILE, index=False)
+# ================= MAIN SYSTEM =================
 
-print(f"\n✅ DONE! Reports saved to: {OUTPUT_FILE}")
+def run_system():
+
+    print("\n" + "="*60)
+    print("🧠 PPG MULTI-SUBJECT ANALYSIS SYSTEM")
+    print("="*60)
+
+    for subject in SUBJECTS:
+
+        result = process_subject(subject)
+        if result is None:
+            continue
+
+        mean_hr, std_hr, motion = result
+
+        print("\n" + "-"*60)
+        print(f"📊 SUBJECT: {subject}")
+        print(f"HR: {mean_hr:.2f} | STD: {std_hr:.2f} | Motion: {motion:.2f}")
+        print("-"*60)
+
+        # -------- REPORT TYPE --------
+        style = input("Select report type (short / long): ").lower()
+        if style not in ["short", "long"]:
+            style = "short"
+
+        # -------- GENERATE REPORT --------
+        report = llm.invoke(
+            report_prompt.format(
+                mean_hr=round(mean_hr, 2),
+                std_hr=round(std_hr, 2),
+                motion=round(motion, 2),
+                style=style
+            )
+        )
+
+        print("\n🧾 REPORT:\n")
+        print(report)
+
+        # -------- DOUBT LOOP --------
+        while True:
+            doubt = input("\n❓ Any doubts? (yes/no): ").lower()
+
+            if doubt == "no":
+                print("➡️ Moving to next subject...\n")
+                break
+
+            elif doubt == "yes":
+                print("\n💬 Chat mode activated (type 'next' to continue)\n")
+
+                while True:
+                    question = input("Ask: ")
+
+                    if question.lower() == "next":
+                        print("➡️ Exiting chat...\n")
+                        break
+
+                    chat_prompt = chat_prompt_template.format(
+                        mean_hr=mean_hr,
+                        std_hr=std_hr,
+                        motion=motion,
+                        question=question
+                    )
+
+                    answer = llm.invoke(chat_prompt)
+
+                    print("\n🧠 Answer:\n", answer)
+
+            else:
+                print("⚠️ Please type 'yes' or 'no'")
+
+    print("\n✅ All subjects completed.")
+
+
+# ================= RUN =================
+
+if __name__ == "__main__":
+    run_system()
